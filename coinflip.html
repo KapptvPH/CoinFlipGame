@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coin Flip Casino</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background-color: #f4f4f4; padding: 20px; }
+        .casino-container { background-color: #fff; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); max-width: 500px; margin: 0 auto; }
+        h1 { color: #333; }
+        #balance { font-size: 1.2em; color: #2a9d8f; }
+        #result { font-size: 1.1em; margin: 10px 0; color: #e76f51; }
+        input, button { padding: 10px; margin: 5px; font-size: 1em; }
+        button { background-color: #2a9d8f; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover:not(.disabled) { background-color: #264653; }
+        .disabled { background-color: #ccc; cursor: not-allowed; }
+        #coin { 
+            width: 150px; 
+            height: 150px; 
+            margin: 20px auto; 
+            display: none; 
+            object-fit: contain; 
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.3); 
+        }
+        .flip-animation { 
+            animation: flip 1s ease-in-out; 
+            display: block; 
+        }
+        @keyframes flip {
+            0% { transform: rotateY(0deg); }
+            50% { transform: rotateY(180deg); }
+            100% { transform: rotateY(360deg); }
+        }
+        #usernameDisplay { font-weight: bold; color: #264653; }
+        #withdrawSection { margin-top: 10px; }
+        #transactionLink { margin-top: 5px; font-size: 0.9em; }
+        a { color: #2a9d8f; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="casino-container">
+        <h1>Coin Flip Casino</h1>
+        <p id="usernameDisplay">Welcome! Connect your wallet and enter your username.</p>
+        <p>Your Balance: <span id="balance">0 BNB</span></p>
+        <button id="connectBscButton" onclick="connectBscWallet()">Connect Wallet (MetaMask)</button>
+        <input type="text" id="usernameInput" placeholder="Enter your username" style="display: block;" />
+        <button id="startButton" onclick="setUsername()">Start Game</button>
+        
+        <div id="gameArea" style="display: none;">
+            <p>Enter your bet (in BNB) and choose Heads or Tails!</p>
+            <input type="number" id="betInput" min="0.01" step="0.01" placeholder="Enter bet amount (BNB)" />
+            <br>
+            <button onclick="play(true)">Heads</button>
+            <button onclick="play(false)">Tails</button>
+            <button onclick="resetGame()">Reset</button>
+            <div id="withdrawSection">
+                <p>Withdraw House Profits:</p>
+                <input type="number" id="withdrawAmount" min="0.01" step="0.01" placeholder="Amount (BNB)" />
+                <input type="text" id="withdrawAddress" placeholder="Enter wallet address" style="width: 200px;" />
+                <button onclick="withdrawProfits()">Withdraw</button>
+            </div>
+            <br>
+            <img id="coin" src="heads.png" alt="Coin">
+            <p id="result"></p>
+            <div id="transactionLink"></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+    <script>
+        let username = "";
+        let provider, signer, walletAddress, contract;
+        const coin = document.getElementById('coin');
+        const resultDisplay = document.getElementById('result');
+        const balanceDisplay = document.getElementById('balance');
+        const connectBscButton = document.getElementById('connectBscButton');
+        const transactionLink = document.getElementById('transactionLink');
+
+        // BSC Contract Details
+        const contractAddress = "0xCF0dedbbeca80101F386D06974e1c332002F41ca";
+        const contractABI = [
+            {"inputs":[],"stateMutability":"nonpayable","type":"constructor"},
+            {"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"player","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount","type":"uint256"},{"indexed":false,"internalType":"bool","name":"guess","type":"bool"},{"indexed":false,"internalType":"bool","name":"result","type":"bool"},{"indexed":false,"internalType":"uint256","name":"payout","type":"uint256"}],"name":"BetPlaced","type":"event"},
+            {"inputs":[{"internalType":"bool","name":"guess","type":"bool"}],"name":"flipCoin","outputs":[],"stateMutability":"payable","type":"function"},
+            {"inputs":[{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"withdraw","outputs":[],"stateMutability":"nonpayable","type":"function"},
+            {"stateMutability":"payable","type":"receive"},
+            {"inputs":[],"name":"getContractBalance","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+            {"inputs":[],"name":"houseEdge","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+            {"inputs":[],"name":"minBet","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+            {"inputs":[],"name":"owner","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},
+            {"inputs":[{"internalType":"address","name":"","type":"address"}],"name":"playerBalances","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"}
+        ];
+
+        // BSC Testnet Explorer Base URL
+        const explorerBaseUrl = "https://testnet.bscscan.com/tx/";
+
+        async function connectBscWallet() {
+            if (!window.ethereum) {
+                resultDisplay.textContent = "Please install MetaMask!";
+                return;
+            }
+            try {
+                provider = new ethers.providers.Web3Provider(window.ethereum);
+                await provider.send("eth_requestAccounts", []);
+                signer = provider.getSigner();
+                walletAddress = await signer.getAddress();
+                contract = new ethers.Contract(contractAddress, contractABI, signer);
+                connectBscButton.textContent = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
+                connectBscButton.disabled = true;
+                resultDisplay.textContent = "Wallet connected! Now enter your username.";
+                await updateBalances();
+            } catch (error) {
+                resultDisplay.textContent = `Connection failed: ${error.message}`;
+                console.error(error);
+            }
+        }
+
+        async function updateBalances() {
+            if (provider && walletAddress) {
+                const balance = await provider.getBalance(walletAddress);
+                const contractBalance = await contract.getContractBalance();
+                const formattedBalance = ethers.utils.formatEther(balance);
+                const formattedContractBalance = ethers.utils.formatEther(contractBalance);
+                balanceDisplay.textContent = `${parseFloat(formattedBalance).toFixed(4)} BNB (House: ${parseFloat(formattedContractBalance).toFixed(4)} BNB)`;
+            } else {
+                balanceDisplay.textContent = "0 BNB";
+            }
+        }
+
+        function setUsername() {
+            const usernameInput = document.getElementById('usernameInput').value.trim();
+            if (usernameInput === "") {
+                resultDisplay.textContent = "Please enter a username!";
+                return;
+            }
+            if (!walletAddress) {
+                resultDisplay.textContent = "Please connect your wallet first!";
+                return;
+            }
+            username = usernameInput;
+            document.getElementById('usernameDisplay').textContent = 
+                `Player: ${username} (Wallet: ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)})`;
+            document.getElementById('usernameInput').style.display = "none";
+            document.getElementById('startButton').style.display = "none";
+            document.getElementById('gameArea').style.display = "block";
+            resultDisplay.textContent = "Game started! Place your bet.";
+            transactionLink.innerHTML = "";
+            updateBalances();
+        }
+
+        async function play(guess) {
+            const betInput = document.getElementById('betInput');
+            const betAmount = parseFloat(betInput.value);
+
+            if (isNaN(betAmount) || betAmount < 0.01) {
+                resultDisplay.textContent = "Please enter a valid bet (min 0.01 BNB).";
+                return;
+            }
+
+            document.querySelectorAll('button').forEach(btn => btn.disabled = true);
+            resultDisplay.textContent = "Waiting for MetaMask confirmation...";
+            transactionLink.innerHTML = ""; // Clear previous link
+
+            try {
+                const betWei = ethers.utils.parseEther(betAmount.toString());
+                const tx = await contract.flipCoin(guess, { value: betWei });
+                const receipt = await tx.wait(); // Wait for transaction confirmation
+                const txHash = receipt.transactionHash;
+                
+                const event = receipt.events.find(e => e.event === "BetPlaced");
+                const result = event.args.result;
+                const payout = ethers.utils.formatEther(event.args.payout);
+
+                // Start animation after confirmation
+                coin.src = "heads.png"; // Placeholder during flip
+                coin.style.display = "block";
+                coin.classList.add('flip-animation');
+
+                setTimeout(() => {
+                    coin.src = result ? "heads.png" : "tails.png"; // Final result image
+                    coin.classList.remove('flip-animation');
+                    if (guess === result) {
+                        resultDisplay.textContent = `${username} won ${payout} BNB betting ${guess ? "Heads" : "Tails"}!`;
+                    } else {
+                        resultDisplay.textContent = `${username} lost ${betAmount} BNB betting ${guess ? "Heads" : "Tails"}.`;
+                    }
+                    transactionLink.innerHTML = `<a href="${explorerBaseUrl}${txHash}" target="_blank">View Transaction: ${txHash.slice(0, 6)}...${txHash.slice(-4)}</a>`;
+                    updateBalances();
+                    betInput.value = '';
+                    document.querySelectorAll('button').forEach(btn => btn.disabled = false);
+                }, 1000);
+            } catch (error) {
+                resultDisplay.textContent = `Transaction failed: ${error.message}`;
+                transactionLink.innerHTML = "";
+                document.querySelectorAll('button').forEach(btn => btn.disabled = false);
+            }
+        }
+
+        async function withdrawProfits() {
+            const withdrawInput = document.getElementById('withdrawAmount');
+            const withdrawAddressInput = document.getElementById('withdrawAddress');
+            const withdrawAmount = parseFloat(withdrawInput.value);
+            const withdrawAddress = withdrawAddressInput.value.trim();
+
+            if (isNaN(withdrawAmount) || withdrawAmount <= 0) {
+                resultDisplay.textContent = "Please enter a valid withdrawal amount.";
+                return;
+            }
+            if (!ethers.utils.isAddress(withdrawAddress)) {
+                resultDisplay.textContent = "Please enter a valid wallet address.";
+                return;
+            }
+
+            document.querySelectorAll('button').forEach(btn => btn.disabled = true);
+            resultDisplay.textContent = "Waiting for MetaMask confirmation...";
+            transactionLink.innerHTML = "";
+
+            try {
+                const amountWei = ethers.utils.parseEther(withdrawAmount.toString());
+                const tx = await contract.withdraw(amountWei);
+                const receipt = await tx.wait();
+                const txHash = receipt.transactionHash;
+
+                resultDisplay.textContent = `Successfully withdrew ${withdrawAmount} BNB to ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)} (connected wallet). Requested address: ${withdrawAddress.slice(0, 6)}...${withdrawAddress.slice(-4)} ignored due to contract limitation.`;
+                transactionLink.innerHTML = `<a href="${explorerBaseUrl}${txHash}" target="_blank">View Transaction: ${txHash.slice(0, 6)}...${txHash.slice(-4)}</a>`;
+                updateBalances();
+            } catch (error) {
+                resultDisplay.textContent = `Withdrawal failed: ${error.message}`;
+                transactionLink.innerHTML = "";
+                console.error(error);
+            } finally {
+                document.querySelectorAll('button').forEach(btn => btn.disabled = false);
+                withdrawInput.value = '';
+                withdrawAddressInput.value = '';
+            }
+        }
+
+        function resetGame() {
+            coin.style.display = "none";
+            resultDisplay.textContent = `${username}'s game reset! Start betting again.`;
+            transactionLink.innerHTML = "";
+            document.getElementById('betInput').value = '';
+            document.getElementById('withdrawAmount').value = '';
+            document.getElementById('withdrawAddress').value = '';
+            document.querySelectorAll('button').forEach(btn => btn.disabled = false);
+            updateBalances();
+        }
+
+        updateBalances();
+    </script>
+</body>
+</html>
